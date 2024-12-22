@@ -1,5 +1,6 @@
 use anyhow::Result;
 use glam::{vec3, Vec3};
+use rand::Rng;
 use std::{fmt::Write, fs, ops::Range};
 
 trait ColorTrait {
@@ -34,9 +35,15 @@ impl Ray {
         self.origin + t * self.direction
     }
 
-    pub fn color(&self, world: &dyn Hittable) -> Vec3 {
-        if let Some(hit_record) = world.hit(self, 0.0..f32::INFINITY) {
-            return 0.5 * (hit_record.normal + Vec3::splat(1.0));
+    pub fn color(&self, depth: u32, world: &dyn Hittable) -> Vec3 {
+        if depth == 0 {
+            return Vec3::ZERO;
+        }
+
+        if let Some(hit_record) = world.hit(self, 0.001..f32::INFINITY) {
+            let direction = random_on_hemisphere(hit_record.normal);
+            let new_ray = Ray::new(hit_record.point, direction);
+            return 0.5 * new_ray.color(depth - 1, world);
         }
 
         let unit_direction = self.direction.normalize_or_zero();
@@ -59,6 +66,7 @@ pub struct Camera {
     pixel00_location: Vec3,
     samples_per_pixel: u32,
     pixel_samples_scale: f32,
+    max_depth: u32,
 }
 
 impl Camera {
@@ -86,6 +94,8 @@ impl Camera {
         let samples_per_pixel = 100;
         let pixel_samples_scale = 1.0 / samples_per_pixel as f32;
 
+        let max_depth = 50;
+
         Self {
             focal_length,
             viewport_height,
@@ -99,6 +109,7 @@ impl Camera {
             pixel00_location,
             samples_per_pixel,
             pixel_samples_scale,
+            max_depth,
         }
     }
 
@@ -112,7 +123,7 @@ impl Camera {
                 let mut pixel_color = Vec3::ZERO;
                 for _sample in 0..self.samples_per_pixel {
                     let ray = self.get_ray(i, j);
-                    pixel_color += ray.color(world);
+                    pixel_color += ray.color(self.max_depth, world);
                 }
 
                 on_pixel(i, j, self.pixel_samples_scale * pixel_color);
@@ -156,6 +167,34 @@ fn sample_square() -> Vec3 {
         rand::random::<f32>() - 0.5,
         0.0,
     )
+}
+
+fn vec3_random() -> Vec3 {
+    vec3(rand::random::<f32>(), rand::random::<f32>(), rand::random::<f32>())
+}
+
+fn vec3_random_range(min: f32, max: f32) -> Vec3 {
+    let mut rng = rand::thread_rng();
+    vec3(rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max))
+}
+
+fn random_unit_vector() -> Vec3 {
+    loop {
+        let p = vec3_random_range(-1.0, 1.0);
+        let length_squared = p.length_squared();
+        if 1e-160 < length_squared && length_squared <= 1.0 {
+            return p / length_squared.sqrt();
+        }
+    }
+}
+
+fn random_on_hemisphere(normal: Vec3) -> Vec3 {
+    let on_unit_sphere = random_unit_vector();
+    if on_unit_sphere.dot(normal) > 0.0 {
+        on_unit_sphere
+    } else {
+        -on_unit_sphere
+    }
 }
 
 #[derive(Clone, Copy)]
