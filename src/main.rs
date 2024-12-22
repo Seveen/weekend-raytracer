@@ -8,9 +8,11 @@ trait ColorTrait {
 
 impl ColorTrait for Vec3 {
     fn write_color(&self, buffer: &mut String) -> Result<()> {
-        let r = (self.x * 255.999) as u32;
-        let g = (self.y * 255.999) as u32;
-        let b = (self.z * 255.999) as u32;
+        let intensity = 0.0..0.999;
+
+        let r = (intensity.clamp(self.x) * 256.0) as u32;
+        let g = (intensity.clamp(self.y) * 256.0) as u32;
+        let b = (intensity.clamp(self.z) * 256.0) as u32;
 
         writeln!(buffer, "{r} {g} {b}")?;
 
@@ -51,60 +53,84 @@ pub struct Camera {
     image_height: u32,
     image_width: u32,
     center: Vec3,
+    pixel_delta_u: Vec3,
+    pixel_delta_v: Vec3,
+    viewport_upper_left: Vec3,
+    pixel00_location: Vec3,
+    samples_per_pixel: u32,
+    pixel_samples_scale: f32,
 }
 
 impl Camera {
     pub fn new(image_width: u32, aspect_ratio: f32) -> Self {
+        let center = Vec3::ZERO;
         let viewport_height = 2.0;
+        let focal_length = 1.0;
+
         let image_height = (image_width as f32 / aspect_ratio) as u32;
         let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
 
+        let viewport_u = vec3(viewport_width, 0.0, 0.0);
+        let viewport_v = vec3(0.0, -viewport_height, 0.0);
+
+        let pixel_delta_u = viewport_u / image_width as f32;
+        let pixel_delta_v = viewport_v / image_height as f32;
+
+        let viewport_upper_left = center
+            - vec3(0.0, 0.0, focal_length)
+            - viewport_u / 2.0
+            - viewport_v / 2.0;
+
+        let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+        let samples_per_pixel = 100;
+        let pixel_samples_scale = 1.0 / samples_per_pixel as f32;
+
         Self {
-            focal_length: 1.0,
+            focal_length,
             viewport_height,
             viewport_width,
             image_height,
             image_width,
-            center: Vec3::ZERO,
+            center,
+            pixel_delta_u,
+            pixel_delta_v,
+            viewport_upper_left,
+            pixel00_location,
+            samples_per_pixel,
+            pixel_samples_scale,
         }
-    }
-
-    pub fn viewport_u(&self) -> Vec3 {
-        vec3(self.viewport_width, 0.0, 0.0)
-    }
-
-    pub fn viewport_v(&self) -> Vec3 {
-        vec3(0.0, -self.viewport_height, 0.0)
-    }
-
-    pub fn viewport_upper_left(&self) -> Vec3 {
-        self.center
-            - vec3(0.0, 0.0, self.focal_length)
-            - self.viewport_u() / 2.0
-            - self.viewport_v() / 2.0
     }
 
     pub fn render<F>(&self, world: &dyn Hittable, mut on_pixel: F)
     where
         F: FnMut(u32, u32, Vec3),
     {
-        let pixel_delta_u = self.viewport_u() / self.image_width as f32;
-        let pixel_delta_v = self.viewport_v() / self.image_height as f32;
-
-        let viewport_upper_left = self.viewport_upper_left();
-        let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
-
         for j in 0..self.image_height {
             println!("Scanlines remaining: {}", self.image_height - j);
             for i in 0..self.image_width {
-                let pixel_center =
-                    pixel00_location + (i as f32 * pixel_delta_u) + (j as f32 * pixel_delta_v);
-                let ray_direction = pixel_center - self.center;
-                let ray = Ray::new(self.center, ray_direction);
+                let mut pixel_color = Vec3::ZERO;
+                for _sample in 0..self.samples_per_pixel {
+                    let ray = self.get_ray(i, j);
+                    pixel_color += ray.color(world);
+                }
 
-                let pixel_color = ray.color(world);
-                on_pixel(i, j, pixel_color);
+                on_pixel(i, j, self.pixel_samples_scale * pixel_color);
             }
+        }
+    }
+
+    fn get_ray(&self, i: u32, j: u32) -> Ray {
+        let offset = sample_square();
+        let pixel_sample = self.pixel00_location
+            + ((i as f32 + offset.x) * self.pixel_delta_u)
+            + ((j as f32 + offset.y) * self.pixel_delta_v);
+
+        let ray_direction = pixel_sample - self.center;
+
+        Ray {
+            origin: self.center,
+            direction: ray_direction,
         }
     }
 
@@ -122,6 +148,14 @@ impl Camera {
 
         Ok(())
     }
+}
+
+fn sample_square() -> Vec3 {
+    vec3(
+        rand::random::<f32>() - 0.5,
+        rand::random::<f32>() - 0.5,
+        0.0,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -174,9 +208,9 @@ impl Hittable for Sphere {
         let squared_discriminant = discriminant.sqrt();
 
         let mut root = (h - squared_discriminant) / a;
-        if !ray_t.surrounds(&root) {
+        if !ray_t.surrounds(root) {
             root = (h + squared_discriminant) / a;
-            if !ray_t.surrounds(&root) {
+            if !ray_t.surrounds(root) {
                 return None;
             }
         }
@@ -206,15 +240,27 @@ impl Hittable for Vec<Box<dyn Hittable>> {
 }
 
 trait RangeExt<Idx> {
-    fn surrounds(&self, x: &Idx) -> bool;
+    fn surrounds(&self, x: Idx) -> bool;
+
+    fn clamp(&self, x: Idx) -> Idx;
 }
 
 impl<Idx> RangeExt<Idx> for Range<Idx>
 where
-    Idx: PartialOrd,
+    Idx: PartialOrd + Copy,
 {
-    fn surrounds(&self, x: &Idx) -> bool {
-        self.start < *x && *x < self.end
+    fn surrounds(&self, x: Idx) -> bool {
+        self.start < x && x < self.end
+    }
+
+    fn clamp(&self, x: Idx) -> Idx {
+        if x < self.start {
+            self.start
+        } else if x > self.end {
+            self.end
+        } else {
+            x
+        }
     }
 }
 
