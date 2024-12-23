@@ -147,15 +147,11 @@ impl Ray {
 }
 
 pub struct Camera {
-    focal_length: f32,
-    viewport_height: f32,
-    viewport_width: f32,
     image_height: u32,
     image_width: u32,
     center: Vec3,
     pixel_delta_u: Vec3,
     pixel_delta_v: Vec3,
-    viewport_upper_left: Vec3,
     pixel00_location: Vec3,
     samples_per_pixel: u32,
     pixel_samples_scale: f32,
@@ -163,22 +159,35 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new(image_width: u32, aspect_ratio: f32) -> Self {
-        let center = Vec3::ZERO;
-        let viewport_height = 2.0;
-        let focal_length = 1.0;
+    pub fn new(
+        image_width: u32,
+        aspect_ratio: f32,
+        vertical_field_of_view: f32,
+        look_from: Vec3,
+        look_at: Vec3,
+        view_up: Vec3,
+    ) -> Self {
+        let center = look_from;
+        let focal_length = (look_from - look_at).length();
+
+        let theta = vertical_field_of_view.to_radians();
+        let h = (theta / 2.0).tan();
+        let viewport_height = 2.0 * h * focal_length;
 
         let image_height = (image_width as f32 / aspect_ratio) as u32;
         let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
 
-        let viewport_u = vec3(viewport_width, 0.0, 0.0);
-        let viewport_v = vec3(0.0, -viewport_height, 0.0);
+        let w = (look_from - look_at).normalize_or_zero();
+        let u = (view_up.cross(w)).normalize_or_zero();
+        let v = w.cross(u);
+
+        let viewport_u = viewport_width * u;
+        let viewport_v = viewport_height * -v;
 
         let pixel_delta_u = viewport_u / image_width as f32;
         let pixel_delta_v = viewport_v / image_height as f32;
 
-        let viewport_upper_left =
-            center - vec3(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
+        let viewport_upper_left = center - (focal_length * w) - viewport_u / 2.0 - viewport_v / 2.0;
 
         let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
@@ -188,15 +197,11 @@ impl Camera {
         let max_depth = 50;
 
         Self {
-            focal_length,
-            viewport_height,
-            viewport_width,
             image_height,
             image_width,
             center,
             pixel_delta_u,
             pixel_delta_v,
-            viewport_upper_left,
             pixel00_location,
             samples_per_pixel,
             pixel_samples_scale,
@@ -466,7 +471,15 @@ fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
 }
 
 fn main() {
-    let camera = Camera::new(3840, 16.0 / 9.0);
+    let camera = Camera::new(
+        400,
+        16.0 / 9.0,
+        20.0,
+        vec3(-2.0, 2.0, 1.0),
+        vec3(0.0, 0.0, -1.0),
+        vec3(0.0, 1.0, 0.0),
+    );
+
     let world: Vec<Box<dyn Hittable>> = vec![
         // Ground
         Box::new(Sphere {
