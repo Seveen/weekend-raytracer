@@ -360,7 +360,11 @@ fn linear_to_gamma(linear_component: f32) -> f32 {
 pub enum Material {
     Lambertian { albedo: Vec3 },
     Metal { albedo: Vec3, fuzz: f32 },
-    Dielectric { refraction_index: f32 },
+    Dielectric { 
+        /// Refractive index in vacuum or air, or the ratio of the material's refractive index over
+        /// the refractive index of the enclosing medium.
+        refraction_index: f32 
+    },
 }
 
 impl Material {
@@ -399,14 +403,30 @@ impl Material {
                 };
 
                 let unit_direction = ray_in.direction.normalize_or_zero();
-                let refracted = unit_direction.refract(hit.normal, refraction_index);
+                let cos_theta = f32::min(-unit_direction.dot(hit.normal), 1.0);
+                let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
-                let scattered = Ray::new(hit.point, refracted);
+                let cannot_refract = refraction_index * sin_theta > 1.0;
+                let direction = if cannot_refract || reflectance(cos_theta, refraction_index) > rand::random() {
+                    unit_direction.reflect(hit.normal)
+                } else {
+                    unit_direction.refract(hit.normal, refraction_index)
+                };
+
+                let scattered = Ray::new(hit.point, direction);
 
                 Some((attenuation, scattered))
             }
         }
     }
+}
+
+// Schlick's approximation for reflectance.
+fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
+    let mut r0 = (1.0 - refraction_index) / (1.0 + refraction_index);
+    r0 *= r0; 
+
+    r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
 fn main() {
@@ -433,7 +453,7 @@ fn main() {
             center: vec3(-1.0, 0.0, -1.0),
             radius: 0.5,
             material: Material::Dielectric {
-                refraction_index: 1.5,
+                refraction_index: 1.0 / 1.33, // Air bubble in water
             },
         }),
         // Right
