@@ -13,6 +13,7 @@ trait Vec3Ext {
     fn random_unit_vector() -> Self;
     fn random_on_hemisphere(normal: Self) -> Self;
     fn near_zero(&self) -> bool;
+    fn random_in_unit_disk() -> Self;
 }
 
 impl Vec3Ext for Vec3 {
@@ -95,6 +96,16 @@ impl Vec3Ext for Vec3 {
         self.x.abs() < s && self.y.abs() < s && self.z.abs() < s
     }
 
+    fn random_in_unit_disk() -> Self {
+        let mut rng = rand::thread_rng();
+        loop {
+            let p = vec3(rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0), 0.0);
+            if p.length_squared() < 1.0 {
+                return p;
+            }
+        }
+    }
+
     // Looks like glam already implements these, only keeping them for reference
     //fn reflect(&self, normal: Self) -> Self {
     //    self - 2.0 * self.dot(normal) * normal
@@ -156,6 +167,9 @@ pub struct Camera {
     samples_per_pixel: u32,
     pixel_samples_scale: f32,
     max_depth: u32,
+    defocus_angle: f32,
+    defocus_disk_u: Vec3,
+    defocus_disk_v: Vec3,
 }
 
 impl Camera {
@@ -168,11 +182,12 @@ impl Camera {
         view_up: Vec3,
     ) -> Self {
         let center = look_from;
-        let focal_length = (look_from - look_at).length();
+        let focus_distance = 3.4;
+        let defocus_angle = 10.0;
 
         let theta = vertical_field_of_view.to_radians();
         let h = (theta / 2.0).tan();
-        let viewport_height = 2.0 * h * focal_length;
+        let viewport_height = 2.0 * h * focus_distance;
 
         let image_height = (image_width as f32 / aspect_ratio) as u32;
         let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
@@ -187,7 +202,8 @@ impl Camera {
         let pixel_delta_u = viewport_u / image_width as f32;
         let pixel_delta_v = viewport_v / image_height as f32;
 
-        let viewport_upper_left = center - (focal_length * w) - viewport_u / 2.0 - viewport_v / 2.0;
+        let viewport_upper_left =
+            center - (focus_distance * w) - viewport_u / 2.0 - viewport_v / 2.0;
 
         let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
@@ -195,6 +211,10 @@ impl Camera {
         let pixel_samples_scale = 1.0 / samples_per_pixel as f32;
 
         let max_depth = 50;
+
+        let defocus_radius = focus_distance * (defocus_angle / 2.0f32).to_radians().tan();
+        let defocus_disk_u = u * defocus_radius;
+        let defocus_disk_v = v * defocus_radius;
 
         Self {
             image_height,
@@ -206,6 +226,9 @@ impl Camera {
             samples_per_pixel,
             pixel_samples_scale,
             max_depth,
+            defocus_angle,
+            defocus_disk_u,
+            defocus_disk_v,
         }
     }
 
@@ -227,18 +250,31 @@ impl Camera {
         }
     }
 
+    /// Construct a camera ray originating from the defocus disk and directed at a randomly
+    /// sampled point around the pixel location i, j.
     fn get_ray(&self, i: u32, j: u32) -> Ray {
         let offset = Vec3::sample_square();
         let pixel_sample = self.pixel00_location
             + ((i as f32 + offset.x) * self.pixel_delta_u)
             + ((j as f32 + offset.y) * self.pixel_delta_v);
 
-        let ray_direction = pixel_sample - self.center;
+        let ray_origin = if self.defocus_angle <= 0.0 {
+            self.center
+        } else {
+            self.defocus_disk_sample()
+        };
+
+        let ray_direction = pixel_sample - ray_origin;
 
         Ray {
-            origin: self.center,
+            origin: ray_origin,
             direction: ray_direction,
         }
+    }
+
+    fn defocus_disk_sample(&self) -> Vec3 {
+        let p = Vec3::random_in_unit_disk();
+        self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v) 
     }
 
     pub fn render_to_ppm_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
@@ -518,7 +554,7 @@ fn main() {
             center: vec3(1.0, 0.0, -1.0),
             radius: 0.5,
             material: Material::Metal {
-                albedo: vec3(1.0, 1.0, 1.0),
+                albedo: vec3(0.2, 1.0, 0.2),
                 fuzz: 0.0,
             },
         }),
