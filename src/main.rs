@@ -1,9 +1,11 @@
 use anyhow::Result;
 use glam::{vec3, Vec3};
+use image::RgbImage;
 use rand::Rng;
 use std::{fmt::Write, fs, ops::Range};
 
 trait Vec3Ext {
+    fn color(&self) -> [u8; 3];
     fn write_color(&self, buffer: &mut String) -> Result<()>;
     fn sample_square() -> Self;
     fn random() -> Self;
@@ -14,6 +16,20 @@ trait Vec3Ext {
 }
 
 impl Vec3Ext for Vec3 {
+    fn color(&self) -> [u8; 3] {
+        let intensity = 0.0..0.999;
+
+        let r = linear_to_gamma(self.x);
+        let g = linear_to_gamma(self.y);
+        let b = linear_to_gamma(self.z);
+
+        let r = (intensity.clamp(r) * 256.0) as u8;
+        let g = (intensity.clamp(g) * 256.0) as u8;
+        let b = (intensity.clamp(b) * 256.0) as u8;
+
+        [r, g, b]
+    }
+
     fn write_color(&self, buffer: &mut String) -> Result<()> {
         let intensity = 0.0..0.999;
 
@@ -166,7 +182,7 @@ impl Camera {
 
         let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        let samples_per_pixel = 100;
+        let samples_per_pixel = 500;
         let pixel_samples_scale = 1.0 / samples_per_pixel as f32;
 
         let max_depth = 50;
@@ -220,7 +236,7 @@ impl Camera {
         }
     }
 
-    pub fn render_to_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
+    pub fn render_to_ppm_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
         let mut buffer = format!("P3\n{} {}\n255\n", self.image_width, self.image_height);
 
         self.render(world, |_i, _j, pixel_color| {
@@ -230,6 +246,19 @@ impl Camera {
         });
 
         fs::write(path, buffer)?;
+        println!("Done");
+
+        Ok(())
+    }
+
+    pub fn render_to_png_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
+        let mut image = RgbImage::new(self.image_width, self.image_height);
+
+        self.render(world, |i, j, pixel_color| {
+            *image.get_pixel_mut(i, j) = pixel_color.color().into();
+        });
+
+        image.save(path)?;
         println!("Done");
 
         Ok(())
@@ -358,12 +387,17 @@ fn linear_to_gamma(linear_component: f32) -> f32 {
 
 #[derive(Clone, Copy)]
 pub enum Material {
-    Lambertian { albedo: Vec3 },
-    Metal { albedo: Vec3, fuzz: f32 },
-    Dielectric { 
+    Lambertian {
+        albedo: Vec3,
+    },
+    Metal {
+        albedo: Vec3,
+        fuzz: f32,
+    },
+    Dielectric {
         /// Refractive index in vacuum or air, or the ratio of the material's refractive index over
         /// the refractive index of the enclosing medium.
-        refraction_index: f32 
+        refraction_index: f32,
     },
 }
 
@@ -407,7 +441,9 @@ impl Material {
                 let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
                 let cannot_refract = refraction_index * sin_theta > 1.0;
-                let direction = if cannot_refract || reflectance(cos_theta, refraction_index) > rand::random() {
+                let direction = if cannot_refract
+                    || reflectance(cos_theta, refraction_index) > rand::random()
+                {
                     unit_direction.reflect(hit.normal)
                 } else {
                     unit_direction.refract(hit.normal, refraction_index)
@@ -424,13 +460,13 @@ impl Material {
 // Schlick's approximation for reflectance.
 fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
     let mut r0 = (1.0 - refraction_index) / (1.0 + refraction_index);
-    r0 *= r0; 
+    r0 *= r0;
 
     r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
 fn main() {
-    let camera = Camera::new(400, 16.0 / 9.0);
+    let camera = Camera::new(3840, 16.0 / 9.0);
     let world: Vec<Box<dyn Hittable>> = vec![
         // Ground
         Box::new(Sphere {
@@ -476,6 +512,6 @@ fn main() {
     ];
 
     camera
-        .render_to_file(&world, "out/image.ppm")
+        .render_to_png_file(&world, "out/image.png")
         .expect("Failed to write image to file");
 }
