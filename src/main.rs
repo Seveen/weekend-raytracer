@@ -350,7 +350,7 @@ fn linear_to_gamma(linear_component: f32) -> f32 {
 #[derive(Clone, Copy)]
 pub enum Material {
     Lambertian { albedo: Vec3 },
-    Metal { albedo: Vec3 },
+    Metal { albedo: Vec3, fuzz: f32 },
 }
 
 impl Material {
@@ -367,10 +367,18 @@ impl Material {
                 let scattered = Ray::new(hit.point, scatter_direction);
                 Some((*albedo, scattered))
             }
-            Material::Metal { albedo } => {
-                let reflected = ray_in.direction.reflect(hit.normal);
+            Material::Metal { albedo, fuzz } => {
+                let mut reflected = ray_in.direction.reflect(hit.normal);
+                reflected = reflected.normalize_or_zero() + (fuzz * Vec3::random_unit_vector());
+
                 let scattered = Ray::new(hit.point, reflected);
-                Some((*albedo, scattered))
+
+                if scattered.direction.dot(hit.normal) > 0.0 {
+                    Some((*albedo, scattered))
+                } else {
+                    // We scattered below the surface, so the ray is absorbed.
+                    None
+                }
             }
         }
     }
@@ -398,6 +406,7 @@ fn main() {
             radius: 0.5,
             material: Material::Metal {
                 albedo: vec3(0.8, 0.8, 0.8),
+                fuzz: 0.3,
             },
         }),
         Box::new(Sphere {
@@ -405,6 +414,7 @@ fn main() {
             radius: 0.5,
             material: Material::Metal {
                 albedo: vec3(0.8, 0.6, 0.2),
+                fuzz: 1.0,
             },
         }),
     ];
