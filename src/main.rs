@@ -11,7 +11,6 @@ trait Vec3Ext {
     fn random_unit_vector() -> Self;
     fn random_on_hemisphere(normal: Self) -> Self;
     fn near_zero(&self) -> bool;
-    fn reflect(&self, normal: Self) -> Self;
 }
 
 impl Vec3Ext for Vec3 {
@@ -80,9 +79,19 @@ impl Vec3Ext for Vec3 {
         self.x.abs() < s && self.y.abs() < s && self.z.abs() < s
     }
 
-    fn reflect(&self, normal: Self) -> Self {
-        self - 2.0 * self.dot(normal) * normal
-    }
+    // Looks like glam already implements these, only keeping them for reference
+    //fn reflect(&self, normal: Self) -> Self {
+    //    self - 2.0 * self.dot(normal) * normal
+    //}
+    //
+    //fn refract(&self, normal: Self, eta_i_over_eta_t: f32) -> Self {
+    //    let cos_theta = f32::min(-self.dot(normal), 1.0);
+    //
+    //    let r_out_perpendicular = eta_i_over_eta_t * (self + cos_theta * normal);
+    //    let r_out_parallel = -((1.0 - r_out_perpendicular.length_squared()).abs().sqrt()) * normal;
+    //
+    //    r_out_perpendicular + r_out_parallel
+    //}
 }
 
 pub struct Ray {
@@ -351,6 +360,7 @@ fn linear_to_gamma(linear_component: f32) -> f32 {
 pub enum Material {
     Lambertian { albedo: Vec3 },
     Metal { albedo: Vec3, fuzz: f32 },
+    Dielectric { refraction_index: f32 },
 }
 
 impl Material {
@@ -380,6 +390,21 @@ impl Material {
                     None
                 }
             }
+            Material::Dielectric { refraction_index } => {
+                let attenuation = Vec3::ONE;
+                let refraction_index = if hit.front_face {
+                    1.0 / refraction_index
+                } else {
+                    *refraction_index
+                };
+
+                let unit_direction = ray_in.direction.normalize_or_zero();
+                let refracted = unit_direction.refract(hit.normal, refraction_index);
+
+                let scattered = Ray::new(hit.point, refracted);
+
+                Some((attenuation, scattered))
+            }
         }
     }
 }
@@ -387,6 +412,7 @@ impl Material {
 fn main() {
     let camera = Camera::new(400, 16.0 / 9.0);
     let world: Vec<Box<dyn Hittable>> = vec![
+        // Ground
         Box::new(Sphere {
             center: vec3(0.0, -100.5, -1.0),
             radius: 100.0,
@@ -394,6 +420,7 @@ fn main() {
                 albedo: vec3(0.8, 0.8, 0.0),
             },
         }),
+        // Center
         Box::new(Sphere {
             center: vec3(0.0, 0.0, -1.2),
             radius: 0.5,
@@ -401,14 +428,15 @@ fn main() {
                 albedo: vec3(0.1, 0.2, 0.5),
             },
         }),
+        // Left
         Box::new(Sphere {
             center: vec3(-1.0, 0.0, -1.0),
             radius: 0.5,
-            material: Material::Metal {
-                albedo: vec3(0.8, 0.8, 0.8),
-                fuzz: 0.3,
+            material: Material::Dielectric {
+                refraction_index: 1.5,
             },
         }),
+        // Right
         Box::new(Sphere {
             center: vec3(1.0, 0.0, -1.0),
             radius: 0.5,
