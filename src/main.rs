@@ -3,21 +3,85 @@ use glam::{vec3, Vec3};
 use rand::Rng;
 use std::{fmt::Write, fs, ops::Range};
 
-trait ColorTrait {
+trait Vec3Ext {
     fn write_color(&self, buffer: &mut String) -> Result<()>;
+    fn sample_square() -> Self;
+    fn random() -> Self;
+    fn random_range(min: f32, max: f32) -> Self;
+    fn random_unit_vector() -> Self;
+    fn random_on_hemisphere(normal: Self) -> Self;
+    fn near_zero(&self) -> bool;
+    fn reflect(&self, normal: Self) -> Self;
 }
 
-impl ColorTrait for Vec3 {
+impl Vec3Ext for Vec3 {
     fn write_color(&self, buffer: &mut String) -> Result<()> {
         let intensity = 0.0..0.999;
 
-        let r = (intensity.clamp(self.x) * 256.0) as u32;
-        let g = (intensity.clamp(self.y) * 256.0) as u32;
-        let b = (intensity.clamp(self.z) * 256.0) as u32;
+        let r = linear_to_gamma(self.x);
+        let g = linear_to_gamma(self.y);
+        let b = linear_to_gamma(self.z);
+
+        let r = (intensity.clamp(r) * 256.0) as u32;
+        let g = (intensity.clamp(g) * 256.0) as u32;
+        let b = (intensity.clamp(b) * 256.0) as u32;
 
         writeln!(buffer, "{r} {g} {b}")?;
 
         Ok(())
+    }
+
+    fn sample_square() -> Self {
+        vec3(
+            rand::random::<f32>() - 0.5,
+            rand::random::<f32>() - 0.5,
+            0.0,
+        )
+    }
+
+    fn random() -> Self {
+        vec3(
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+        )
+    }
+
+    fn random_range(min: f32, max: f32) -> Self {
+        let mut rng = rand::thread_rng();
+        vec3(
+            rng.gen_range(min..max),
+            rng.gen_range(min..max),
+            rng.gen_range(min..max),
+        )
+    }
+
+    fn random_unit_vector() -> Self {
+        loop {
+            let p = Vec3::random_range(-1.0, 1.0);
+            let length_squared = p.length_squared();
+            if 1e-160 < length_squared && length_squared <= 1.0 {
+                return p / length_squared.sqrt();
+            }
+        }
+    }
+
+    fn random_on_hemisphere(normal: Self) -> Self {
+        let on_unit_sphere = Vec3::random_unit_vector();
+        if on_unit_sphere.dot(normal) > 0.0 {
+            on_unit_sphere
+        } else {
+            -on_unit_sphere
+        }
+    }
+
+    fn near_zero(&self) -> bool {
+        let s = 1e-8;
+        self.x.abs() < s && self.y.abs() < s && self.z.abs() < s
+    }
+
+    fn reflect(&self, normal: Self) -> Self {
+        self - 2.0 * self.dot(normal) * normal
     }
 }
 
@@ -36,14 +100,18 @@ impl Ray {
     }
 
     pub fn color(&self, depth: u32, world: &dyn Hittable) -> Vec3 {
+        // If we've exceeded the ray bounce limit, no more light is gathered.
         if depth == 0 {
             return Vec3::ZERO;
         }
 
         if let Some(hit_record) = world.hit(self, 0.001..f32::INFINITY) {
-            let direction = random_on_hemisphere(hit_record.normal);
-            let new_ray = Ray::new(hit_record.point, direction);
-            return 0.5 * new_ray.color(depth - 1, world);
+            match hit_record.material_hit.scatter(self, &hit_record) {
+                Some((attenuation, scattered_ray)) => {
+                    return attenuation * scattered_ray.color(depth - 1, world);
+                }
+                None => return Vec3::ZERO,
+            }
         }
 
         let unit_direction = self.direction.normalize_or_zero();
@@ -84,10 +152,8 @@ impl Camera {
         let pixel_delta_u = viewport_u / image_width as f32;
         let pixel_delta_v = viewport_v / image_height as f32;
 
-        let viewport_upper_left = center
-            - vec3(0.0, 0.0, focal_length)
-            - viewport_u / 2.0
-            - viewport_v / 2.0;
+        let viewport_upper_left =
+            center - vec3(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
 
         let pixel00_location = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
@@ -132,7 +198,7 @@ impl Camera {
     }
 
     fn get_ray(&self, i: u32, j: u32) -> Ray {
-        let offset = sample_square();
+        let offset = Vec3::sample_square();
         let pixel_sample = self.pixel00_location
             + ((i as f32 + offset.x) * self.pixel_delta_u)
             + ((j as f32 + offset.y) * self.pixel_delta_v);
@@ -161,52 +227,17 @@ impl Camera {
     }
 }
 
-fn sample_square() -> Vec3 {
-    vec3(
-        rand::random::<f32>() - 0.5,
-        rand::random::<f32>() - 0.5,
-        0.0,
-    )
-}
-
-fn vec3_random() -> Vec3 {
-    vec3(rand::random::<f32>(), rand::random::<f32>(), rand::random::<f32>())
-}
-
-fn vec3_random_range(min: f32, max: f32) -> Vec3 {
-    let mut rng = rand::thread_rng();
-    vec3(rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max))
-}
-
-fn random_unit_vector() -> Vec3 {
-    loop {
-        let p = vec3_random_range(-1.0, 1.0);
-        let length_squared = p.length_squared();
-        if 1e-160 < length_squared && length_squared <= 1.0 {
-            return p / length_squared.sqrt();
-        }
-    }
-}
-
-fn random_on_hemisphere(normal: Vec3) -> Vec3 {
-    let on_unit_sphere = random_unit_vector();
-    if on_unit_sphere.dot(normal) > 0.0 {
-        on_unit_sphere
-    } else {
-        -on_unit_sphere
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct HitRecord {
     point: Vec3,
     normal: Vec3,
     t: f32,
     front_face: bool,
+    material_hit: Material,
 }
 
 impl HitRecord {
-    pub fn new(point: Vec3, t: f32, ray: &Ray, outward_normal: Vec3) -> Self {
+    pub fn new(point: Vec3, t: f32, ray: &Ray, outward_normal: Vec3, material: Material) -> Self {
         let front_face = ray.direction.dot(outward_normal) < 0.0;
         let normal = if front_face {
             outward_normal
@@ -219,6 +250,7 @@ impl HitRecord {
             t,
             normal,
             front_face,
+            material_hit: material,
         }
     }
 }
@@ -228,6 +260,7 @@ pub trait Hittable {
 }
 
 struct Sphere {
+    material: Material,
     center: Vec3,
     radius: f32,
 }
@@ -256,7 +289,7 @@ impl Hittable for Sphere {
 
         let point = ray.at(root);
         let outward_normal = (point - self.center) / self.radius;
-        let hit_record = HitRecord::new(point, root, ray, outward_normal);
+        let hit_record = HitRecord::new(point, root, ray, outward_normal, self.material);
 
         Some(hit_record)
     }
@@ -306,16 +339,73 @@ where
 const EMPTY: Range<f32> = f32::INFINITY..-f32::INFINITY;
 const UNIVERSE: Range<f32> = -f32::INFINITY..f32::INFINITY;
 
+fn linear_to_gamma(linear_component: f32) -> f32 {
+    if linear_component > 0.0 {
+        linear_component.sqrt()
+    } else {
+        0.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Material {
+    Lambertian { albedo: Vec3 },
+    Metal { albedo: Vec3 },
+}
+
+impl Material {
+    fn scatter(&self, ray_in: &Ray, hit: &HitRecord) -> Option<(Vec3, Ray)> {
+        match self {
+            Material::Lambertian { albedo } => {
+                let mut scatter_direction = hit.normal + Vec3::random_unit_vector();
+
+                // Catch degenerate scatter direction
+                if scatter_direction.near_zero() {
+                    scatter_direction = hit.normal;
+                }
+
+                let scattered = Ray::new(hit.point, scatter_direction);
+                Some((*albedo, scattered))
+            }
+            Material::Metal { albedo } => {
+                let reflected = ray_in.direction.reflect(hit.normal);
+                let scattered = Ray::new(hit.point, reflected);
+                Some((*albedo, scattered))
+            }
+        }
+    }
+}
+
 fn main() {
     let camera = Camera::new(400, 16.0 / 9.0);
     let world: Vec<Box<dyn Hittable>> = vec![
         Box::new(Sphere {
-            center: vec3(0.0, 0.0, -1.0),
-            radius: 0.5,
-        }),
-        Box::new(Sphere {
             center: vec3(0.0, -100.5, -1.0),
             radius: 100.0,
+            material: Material::Lambertian {
+                albedo: vec3(0.8, 0.8, 0.0),
+            },
+        }),
+        Box::new(Sphere {
+            center: vec3(0.0, 0.0, -1.2),
+            radius: 0.5,
+            material: Material::Lambertian {
+                albedo: vec3(0.1, 0.2, 0.5),
+            },
+        }),
+        Box::new(Sphere {
+            center: vec3(-1.0, 0.0, -1.0),
+            radius: 0.5,
+            material: Material::Metal {
+                albedo: vec3(0.8, 0.8, 0.8),
+            },
+        }),
+        Box::new(Sphere {
+            center: vec3(1.0, 0.0, -1.0),
+            radius: 0.5,
+            material: Material::Metal {
+                albedo: vec3(0.8, 0.6, 0.2),
+            },
         }),
     ];
 
