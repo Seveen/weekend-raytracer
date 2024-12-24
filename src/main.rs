@@ -182,8 +182,8 @@ impl Camera {
         view_up: Vec3,
     ) -> Self {
         let center = look_from;
-        let focus_distance = 3.4;
-        let defocus_angle = 10.0;
+        let focus_distance = 10.0;
+        let defocus_angle = 0.6;
 
         let theta = vertical_field_of_view.to_radians();
         let h = (theta / 2.0).tan();
@@ -274,7 +274,7 @@ impl Camera {
 
     fn defocus_disk_sample(&self) -> Vec3 {
         let p = Vec3::random_in_unit_disk();
-        self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v) 
+        self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v)
     }
 
     pub fn render_to_ppm_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
@@ -508,57 +508,92 @@ fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
 
 fn main() {
     let camera = Camera::new(
-        400,
+        3840,
         16.0 / 9.0,
         20.0,
-        vec3(-2.0, 2.0, 1.0),
-        vec3(0.0, 0.0, -1.0),
+        vec3(13.0, 2.0, 3.0),
+        vec3(0.0, 0.0, 0.0),
         vec3(0.0, 1.0, 0.0),
     );
 
-    let world: Vec<Box<dyn Hittable>> = vec![
+    let mut rng = rand::thread_rng();
+
+    let mut world: Vec<Box<dyn Hittable>> = vec![
         // Ground
         Box::new(Sphere {
-            center: vec3(0.0, -100.5, -1.0),
-            radius: 100.0,
+            center: vec3(0.0, -1000.0, 0.0),
+            radius: 1000.0,
             material: Material::Lambertian {
-                albedo: vec3(0.8, 0.8, 0.0),
-            },
-        }),
-        // Center
-        Box::new(Sphere {
-            center: vec3(0.0, 0.0, -1.2),
-            radius: 0.5,
-            material: Material::Lambertian {
-                albedo: vec3(0.1, 0.2, 0.5),
-            },
-        }),
-        // Left
-        Box::new(Sphere {
-            center: vec3(-1.0, 0.0, -1.0),
-            radius: 0.5,
-            material: Material::Dielectric {
-                refraction_index: 1.5,
-            },
-        }),
-        // Bubble
-        Box::new(Sphere {
-            center: vec3(-1.0, 0.0, -1.0),
-            radius: 0.4,
-            material: Material::Dielectric {
-                refraction_index: 1.0 / 1.5, // Air bubble in glass
-            },
-        }),
-        // Right
-        Box::new(Sphere {
-            center: vec3(1.0, 0.0, -1.0),
-            radius: 0.5,
-            material: Material::Metal {
-                albedo: vec3(0.2, 1.0, 0.2),
-                fuzz: 0.0,
+                albedo: vec3(0.5, 0.5, 0.5),
             },
         }),
     ];
+
+    for a in -11..11 {
+        for b in -11..11 {
+            let choose_mat: f32 = rng.gen();
+            let center = vec3(
+                (a as f32 + 0.9) * rng.gen::<f32>(),
+                0.2,
+                (b as f32 + 0.9) * rand::random::<f32>(),
+            );
+
+            if (center - vec3(4.0, 0.2, 0.0)).length() > 0.9 {
+                if choose_mat < 0.8 {
+                    // diffuse
+                    let albedo = Vec3::random() * Vec3::random();
+                    world.push(Box::new(Sphere {
+                        center,
+                        radius: 0.2,
+                        material: Material::Lambertian { albedo },
+                    }));
+                } else if choose_mat < 0.95 {
+                    // metal
+                    let albedo = Vec3::random_range(0.5, 1.0);
+                    let fuzz = rng.gen_range(0.0..0.5);
+                    world.push(Box::new(Sphere {
+                        center,
+                        radius: 0.2,
+                        material: Material::Metal { albedo, fuzz },
+                    }));
+                } else {
+                    // glass
+                    world.push(Box::new(Sphere {
+                        center,
+                        radius: 0.2,
+                        material: Material::Dielectric {
+                            refraction_index: 1.5,
+                        },
+                    }));
+                }
+            }
+        }
+    }
+
+    world.push(Box::new(Sphere {
+        center: vec3(0.0, 1.0, 0.0),
+        radius: 1.0,
+        material: Material::Dielectric {
+            refraction_index: 1.5,
+        },
+    }));
+
+    world.push(Box::new(Sphere {
+        center: vec3(-4.0, 1.0, 0.0),
+        radius: 1.0,
+        material: Material::Lambertian {
+            albedo: vec3(0.4, 0.2, 0.1),
+        },
+    }));
+
+    world.push(Box::new(Sphere {
+        center: vec3(4.0, 1.0, 0.0),
+        radius: 1.0,
+        material: Material::Metal {
+            albedo: vec3(0.7, 0.6, 0.5),
+            fuzz: 0.0,
+        },
+    }));
 
     camera
         .render_to_png_file(&world, "out/image.png")
