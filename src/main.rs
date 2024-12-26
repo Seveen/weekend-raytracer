@@ -2,11 +2,11 @@ use anyhow::Result;
 use glam::{vec3, Vec3};
 use image::RgbImage;
 use rand::Rng;
-use std::{fmt::Write, fs, ops::Range};
+use rayon::prelude::*;
+use std::{ops::Range, sync::Arc, time::Instant};
 
 trait Vec3Ext {
     fn color(&self) -> [u8; 3];
-    fn write_color(&self, buffer: &mut String) -> Result<()>;
     fn sample_square() -> Self;
     fn random() -> Self;
     fn random_range(min: f32, max: f32) -> Self;
@@ -24,27 +24,11 @@ impl Vec3Ext for Vec3 {
         let g = linear_to_gamma(self.y);
         let b = linear_to_gamma(self.z);
 
-        let r = (intensity.clamp(r) * 256.0) as u8;
-        let g = (intensity.clamp(g) * 256.0) as u8;
-        let b = (intensity.clamp(b) * 256.0) as u8;
+        let r = (intensity.clamp(r) * 256.0).trunc() as u8;
+        let g = (intensity.clamp(g) * 256.0).trunc() as u8;
+        let b = (intensity.clamp(b) * 256.0).trunc() as u8;
 
         [r, g, b]
-    }
-
-    fn write_color(&self, buffer: &mut String) -> Result<()> {
-        let intensity = 0.0..0.999;
-
-        let r = linear_to_gamma(self.x);
-        let g = linear_to_gamma(self.y);
-        let b = linear_to_gamma(self.z);
-
-        let r = (intensity.clamp(r) * 256.0) as u32;
-        let g = (intensity.clamp(g) * 256.0) as u32;
-        let b = (intensity.clamp(b) * 256.0) as u32;
-
-        writeln!(buffer, "{r} {g} {b}")?;
-
-        Ok(())
     }
 
     fn sample_square() -> Self {
@@ -250,6 +234,22 @@ impl Camera {
         }
     }
 
+    pub fn parallel_render(&self, world: Arc<impl Hittable>) -> Vec<(u32, u32, Vec3)> {
+        (0..(self.image_height * self.image_width))
+            .into_par_iter()
+            .map(|idx| {
+                let i = idx % self.image_width;
+                let j = idx / self.image_width;
+                let mut pixel_color = Vec3::ZERO;
+                for _sample in 0..self.samples_per_pixel {
+                    let ray = self.get_ray(i, j);
+                    pixel_color += ray.color(self.max_depth, &*world);
+                }
+                (i, j, self.pixel_samples_scale * pixel_color)
+            })
+            .collect()
+    }
+
     /// Construct a camera ray originating from the defocus disk and directed at a randomly
     /// sampled point around the pixel location i, j.
     fn get_ray(&self, i: u32, j: u32) -> Ray {
@@ -277,30 +277,26 @@ impl Camera {
         self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v)
     }
 
-    pub fn render_to_ppm_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
-        let mut buffer = format!("P3\n{} {}\n255\n", self.image_width, self.image_height);
+    pub fn render_to_png_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
+        let mut image = RgbImage::new(self.image_width, self.image_height);
 
-        self.render(world, |_i, _j, pixel_color| {
-            pixel_color
-                .write_color(&mut buffer)
-                .expect("Failed to write pixel color to buffer");
+        self.render(world, |i, j, pixel| {
+            *image.get_pixel_mut(i, j) = pixel.color().into();
         });
 
-        fs::write(path, buffer)?;
-        println!("Done");
+        image.save(path)?;
 
         Ok(())
     }
 
-    pub fn render_to_png_file(&self, world: &dyn Hittable, path: &str) -> Result<()> {
+    pub fn parallel_render_to_png_file(&self, world: Arc<impl Hittable>, path: &str) -> Result<()> {
         let mut image = RgbImage::new(self.image_width, self.image_height);
 
-        self.render(world, |i, j, pixel_color| {
-            *image.get_pixel_mut(i, j) = pixel_color.color().into();
-        });
+        for (i, j, pixel) in self.parallel_render(world) {
+            *image.get_pixel_mut(i, j) = pixel.color().into();
+        }
 
         image.save(path)?;
-        println!("Done");
 
         Ok(())
     }
@@ -334,7 +330,7 @@ impl HitRecord {
     }
 }
 
-pub trait Hittable {
+pub trait Hittable: Send + Sync {
     fn hit(&self, ray: &Ray, ray_t: Range<f32>) -> Option<HitRecord>;
 }
 
@@ -414,9 +410,6 @@ where
         }
     }
 }
-
-const EMPTY: Range<f32> = f32::INFINITY..-f32::INFINITY;
-const UNIVERSE: Range<f32> = -f32::INFINITY..f32::INFINITY;
 
 fn linear_to_gamma(linear_component: f32) -> f32 {
     if linear_component > 0.0 {
@@ -507,6 +500,8 @@ fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
 }
 
 fn main() {
+    let now = Instant::now();
+
     let camera = Camera::new(
         3840,
         16.0 / 9.0,
@@ -596,6 +591,9 @@ fn main() {
     }));
 
     camera
-        .render_to_png_file(&world, "out/image.png")
+        .parallel_render_to_png_file(Arc::new(world), "out/image.png")
+        //.render_to_png_file(&world, "out/image.png")
         .expect("Failed to write image to file");
+
+    println!("Done in {:?}", now.elapsed());
 }
